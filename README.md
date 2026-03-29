@@ -24,7 +24,7 @@ Unlike standard fuzzers that stop at a `404 Not Found` or `403 Forbidden`, **Ult
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Gazaz-manukyan/ultifuzz
+   git clone https://github.com/yourusername/ultifuzz.git
    cd ultifuzz
    ```
 

@@ -20,7 +20,6 @@ const (
 	colorCyan   = "\033[36m"
 )
 
-// FfufResult represents a partial structure of ffuf output
 type FfufOutput struct {
 	Results []FfufResult `json:"results"`
 }
@@ -35,7 +34,7 @@ func main() {
 	wordlist := flag.String("w", "", "Path to wordlist")
 	threads := flag.Int("t", 40, "Number of threads")
 	userAgent := flag.String("ua", "UltiFuzz/1.0", "User-Agent string")
-	recursionCodes := flag.String("rc", "200,301,302,403,404", "HTTP status codes to recurse on")
+	recursionCodes := flag.String("rc", "200,301,302,403,404", "HTTP status codes to recurse on (or 0 to disable)")
 	recursionDepth := flag.Int("rd", 2, "Maximum recursion depth")
 	flag.Parse()
 
@@ -46,7 +45,6 @@ func main() {
 
 	fmt.Printf("%s[*] Starting UltiFuzz for %s%s\n", colorBlue, *domain, colorReset)
 
-	// 1. Create directory structure
 	baseDir := filepath.Join("output", *domain)
 	dirsDir := filepath.Join(baseDir, "dirs")
 	subdomainsDir := filepath.Join(baseDir, "subdomains")
@@ -66,7 +64,6 @@ func main() {
 	
 	activeSubFile := filepath.Join(subdomainsDir, "active_subdomains.txt")
 	runCommandBash(fmt.Sprintf("cat %s | sort -u | dnsx -silent > %s", rawSubFile, activeSubFile))
-	fmt.Printf("%s[!] Active subdomains saved to: %s%s\n", colorYellow, activeSubFile, colorReset)
 
 	// 3. Passive Gathering - Wayback, Gau & SQLmap Params
 	fmt.Printf("%s[+] Harvesting URLs & Variables for SQLmap...%s\n", colorGreen, colorReset)
@@ -76,9 +73,7 @@ func main() {
 	
 	runCommandBash(fmt.Sprintf("waybackurls %s > %s", *domain, waybackFile))
 	runCommandBash(fmt.Sprintf("gau %s > %s", *domain, gauFile))
-
 	runCommandBash(fmt.Sprintf("cat %s %s | grep '=' | qsreplace 'test' | sort -u > %s", waybackFile, gauFile, sqlmapFile))
-	fmt.Printf("%s[!] SQLmap-ready URLs saved to: %s%s\n", colorYellow, sqlmapFile, colorReset)
 
 	// 4. Active Fuzzing - ffuf
 	fmt.Printf("%s[+] Running Active Fuzzing (ffuf)...%s\n", colorGreen, colorReset)
@@ -89,59 +84,48 @@ func main() {
 		"-w", *wordlist,
 		"-t", fmt.Sprint(*threads),
 		"-H", fmt.Sprintf("User-Agent: %s", *userAgent),
-		"-recursion",
-		"-recursion-strategy", "greedy",
-		"-recursion-depth", fmt.Sprint(*recursionDepth),
-		"-mc", *recursionCodes,
 		"-o", ffufOutput,
 		"-of", "json",
+	}
+
+	// Check if recursion is disabled
+	if *recursionCodes == "0" {
+		fmt.Printf("%s[*] Recursion disabled. Performing basic fuzzing...%s\n", colorYellow, colorReset)
+		ffufArgs = append(ffufArgs, "-mc", "200,301,302,307,401,405") // Only match "open" codes
+	} else {
+		ffufArgs = append(ffufArgs, "-recursion", "-recursion-strategy", "greedy", "-recursion-depth", fmt.Sprint(*recursionDepth), "-mc", *recursionCodes)
 	}
 	
 	cmd := exec.Command("ffuf", ffufArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("%s[-] ffuf execution finished with some issues (or stopped by user): %v%s\n", colorYellow, err, colorReset)
-	}
+	cmd.Run()
 
-	// 5. Finalize - Processing results for clean output
 	processFfufResults(ffufOutput, filepath.Join(dirsDir, "valid_dirs.txt"))
 
-	fmt.Printf("%s[*] Done! Final results saved in %s%s\n", colorBlue, baseDir, colorReset)
+	fmt.Printf("%s[*] Done! Results: %s%s\n", colorBlue, baseDir, colorReset)
 }
 
 func processFfufResults(jsonFile, txtFile string) {
 	fmt.Printf("%s[*] Cleaning up results...%s\n", colorBlue, colorReset)
-	
 	data, err := os.ReadFile(jsonFile)
 	if err != nil {
-		fmt.Printf("%s[-] Could not read ffuf results: %v%s\n", colorRed, err, colorReset)
 		return
 	}
 
 	var ffufOut FfufOutput
-	if err := json.Unmarshal(data, &ffufOut); err != nil {
-		fmt.Printf("%s[-] Error parsing ffuf JSON: %v%s\n", colorRed, err, colorReset)
-		return
-	}
+	json.Unmarshal(data, &ffufOut)
 
-	file, err := os.Create(txtFile)
-	if err != nil {
-		fmt.Printf("%s[-] Error creating valid_dirs.txt: %v%s\n", colorRed, err, colorReset)
-		return
-	}
+	file, _ := os.Create(txtFile)
 	defer file.Close()
 
 	count := 0
 	for _, res := range ffufOut.Results {
-		// Only save if status is NOT 404 or 403
+		// Only save if status is NOT 404 or 403 (standard success/redirects)
 		if res.Status != 404 && res.Status != 403 {
-			// Clean URL from http:// or https://
 			cleanURL := res.URL
 			cleanURL = strings.TrimPrefix(cleanURL, "https://")
 			cleanURL = strings.TrimPrefix(cleanURL, "http://")
-			
-			// Format: domen/dir status_code
 			fmt.Fprintf(file, "%s %d\n", cleanURL, res.Status)
 			count++
 		}
@@ -151,7 +135,5 @@ func processFfufResults(jsonFile, txtFile string) {
 
 func runCommandBash(command string) {
 	cmd := exec.Command("bash", "-c", command)
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("%s[-] Warning: command failed: %s (%v)%s\n", colorYellow, command, err, colorReset)
-	}
+	cmd.Run()
 }

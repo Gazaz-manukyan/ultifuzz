@@ -6,11 +6,15 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${BLUE}[*] Checking for updates...${NC}"
+# Определяем директорию скрипта
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd "$SCRIPT_DIR"
+
+echo -e "${BLUE}[*] Checking for updates in $SCRIPT_DIR...${NC}"
 
 # Проверка, находимся ли мы в git-репозитории
 if [ ! -d .git ]; then
-    echo -e "${RED}[-] Error: This folder is not a git repository. Please clone it from GitHub again.${NC}"
+    echo -e "${RED}[-] Error: This folder is not a git repository.${NC}"
     exit 1
 fi
 
@@ -29,5 +33,5 @@ else
     chmod +x install.sh
     ./install.sh
     
-    echo -e "${GREEN}[+] UltiFuzz has been updated to the latest version!${NC}"
+    echo -e "${GREEN}[+] UltiFuzz has been updated successfully!${NC}"
 fi
