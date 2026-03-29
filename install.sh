@@ -22,6 +22,7 @@ go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
 go install github.com/lc/gau/v2/cmd/gau@latest
 go install github.com/tomnomnom/waybackurls@latest
 go install github.com/tomnomnom/assetfinder@latest
+go install github.com/tomnomnom/qsreplace@latest
 
 # Сборка и установка самого UltiFuzz
 echo -e "${GREEN}[+] Building and installing UltiFuzz globally...${NC}"

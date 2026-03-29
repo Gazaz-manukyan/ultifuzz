@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -17,6 +19,16 @@ const (
 	colorBlue   = "\033[34m"
 	colorCyan   = "\033[36m"
 )
+
+// FfufResult represents a partial structure of ffuf output
+type FfufOutput struct {
+	Results []FfufResult `json:"results"`
+}
+
+type FfufResult struct {
+	URL    string `json:"url"`
+	Status int    `json:"status"`
+}
 
 func main() {
 	domain := flag.String("d", "", "Target domain (e.g., example.com)")
@@ -52,25 +64,21 @@ func main() {
 	runCommandBash(fmt.Sprintf("subfinder -d %s -silent > %s", *domain, rawSubFile))
 	runCommandBash(fmt.Sprintf("assetfinder --subs-only %s >> %s", *domain, rawSubFile))
 	
-	// Use dnsx to verify active subdomains
 	activeSubFile := filepath.Join(subdomainsDir, "active_subdomains.txt")
 	runCommandBash(fmt.Sprintf("cat %s | sort -u | dnsx -silent > %s", rawSubFile, activeSubFile))
 	fmt.Printf("%s[!] Active subdomains saved to: %s%s\n", colorYellow, activeSubFile, colorReset)
 
-	// 3. Passive Gathering - Wayback & Params
-	fmt.Printf("%s[+] Running Wayback & Archive Gathering (waybackurls, gau)...%s\n", colorGreen, colorReset)
+	// 3. Passive Gathering - Wayback, Gau & SQLmap Params
+	fmt.Printf("%s[+] Harvesting URLs & Variables for SQLmap...%s\n", colorGreen, colorReset)
 	waybackFile := filepath.Join(paramsDir, "wayback.txt")
 	gauFile := filepath.Join(paramsDir, "gau.txt")
+	sqlmapFile := filepath.Join(paramsDir, "urls_for_sqlmap.txt")
 	
 	runCommandBash(fmt.Sprintf("waybackurls %s > %s", *domain, waybackFile))
 	runCommandBash(fmt.Sprintf("gau %s > %s", *domain, gauFile))
 
-	// Extracting params and combining
-	paramsFile := filepath.Join(paramsDir, "params.txt")
-	combinedUrls := filepath.Join(paramsDir, "combined_urls.txt")
-	runCommandBash(fmt.Sprintf("cat %s %s | sort -u > %s", waybackFile, gauFile, combinedUrls))
-	runCommandBash(fmt.Sprintf("grep '?' %s | cut -d '?' -f 2 | tr '&' '\\n' | sort -u > %s", combinedUrls, paramsFile))
-	fmt.Printf("%s[!] Extracted parameters saved to: %s%s\n", colorYellow, paramsFile, colorReset)
+	runCommandBash(fmt.Sprintf("cat %s %s | grep '=' | qsreplace 'test' | sort -u > %s", waybackFile, gauFile, sqlmapFile))
+	fmt.Printf("%s[!] SQLmap-ready URLs saved to: %s%s\n", colorYellow, sqlmapFile, colorReset)
 
 	// 4. Active Fuzzing - ffuf
 	fmt.Printf("%s[+] Running Active Fuzzing (ffuf)...%s\n", colorGreen, colorReset)
@@ -89,7 +97,6 @@ func main() {
 		"-of", "json",
 	}
 	
-	// For ffuf we want to see the output
 	cmd := exec.Command("ffuf", ffufArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -97,13 +104,53 @@ func main() {
 		fmt.Printf("%s[-] ffuf execution finished with some issues (or stopped by user): %v%s\n", colorYellow, err, colorReset)
 	}
 
-	fmt.Printf("%s[*] Done! Results saved in %s%s\n", colorBlue, baseDir, colorReset)
+	// 5. Finalize - Processing results for clean output
+	processFfufResults(ffufOutput, filepath.Join(dirsDir, "valid_dirs.txt"))
+
+	fmt.Printf("%s[*] Done! Final results saved in %s%s\n", colorBlue, baseDir, colorReset)
+}
+
+func processFfufResults(jsonFile, txtFile string) {
+	fmt.Printf("%s[*] Cleaning up results...%s\n", colorBlue, colorReset)
+	
+	data, err := os.ReadFile(jsonFile)
+	if err != nil {
+		fmt.Printf("%s[-] Could not read ffuf results: %v%s\n", colorRed, err, colorReset)
+		return
+	}
+
+	var ffufOut FfufOutput
+	if err := json.Unmarshal(data, &ffufOut); err != nil {
+		fmt.Printf("%s[-] Error parsing ffuf JSON: %v%s\n", colorRed, err, colorReset)
+		return
+	}
+
+	file, err := os.Create(txtFile)
+	if err != nil {
+		fmt.Printf("%s[-] Error creating valid_dirs.txt: %v%s\n", colorRed, err, colorReset)
+		return
+	}
+	defer file.Close()
+
+	count := 0
+	for _, res := range ffufOut.Results {
+		// Only save if status is NOT 404 or 403
+		if res.Status != 404 && res.Status != 403 {
+			// Clean URL from http:// or https://
+			cleanURL := res.URL
+			cleanURL = strings.TrimPrefix(cleanURL, "https://")
+			cleanURL = strings.TrimPrefix(cleanURL, "http://")
+			
+			// Format: domen/dir status_code
+			fmt.Fprintf(file, "%s %d\n", cleanURL, res.Status)
+			count++
+		}
+	}
+	fmt.Printf("%s[!] Found %d valid directories/files. Saved to %s%s\n", colorYellow, count, txtFile, colorReset)
 }
 
 func runCommandBash(command string) {
 	cmd := exec.Command("bash", "-c", command)
-	// We don't pipe stdout for passive tools to keep it clean, 
-	// but you could pipe it to a log file if needed.
 	if err := cmd.Run(); err != nil {
 		fmt.Printf("%s[-] Warning: command failed: %s (%v)%s\n", colorYellow, command, err, colorReset)
 	}
